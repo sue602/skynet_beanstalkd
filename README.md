@@ -1,5 +1,7 @@
 # skynet_beanstalkd
 beanstalkd for skynet(https://github.com/cloudwu/skynet.git)
+modify from https://github.com/dualface/gbc-core.git
+
 
 1. install beanstalkd from https://github.com/kr/beanstalkd.git
 2. follow beanstalkd quick start :
