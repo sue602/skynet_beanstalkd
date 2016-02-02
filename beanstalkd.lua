@@ -22,7 +22,8 @@ THE SOFTWARE.
 
 ]]
 
-local mysocket = require("socket")
+local socketchannel = require "socketchannel"
+local mysocketchannel = nil--require("socket")
 local _TIME_MULTIPLY = 1
 
 local string_byte   = string.byte
@@ -64,18 +65,19 @@ local _req, _reqstate, _reqvalue, _reqyml
 local _readreply, _getvalue, _getjob, _getyml
 
 function Beanstalkd:connect(host, port)
-    self.client_fd = nil
-    local client_fd, err = mysocket.open(host or DEFAULT_HOST, port or DEFAULT_PORT)
-    if not client_fd then
-        return nil, err
-    end
-    self.client_fd = client_fd
+    local channel = socketchannel.channel {
+        host = host or DEFAULT_HOST,
+        port = port or DEFAULT_PORT,
+    }
+    -- try connect first only once
+    channel:connect(true)
+    mysocketchannel = channel
     return 1
 end
 
 --[[
 function Beanstalkd:setTimeout(timeout)
-    local socket = self.client_fd
+    local socket = nil
     if not socket then
         return nil, "not initialized"
     end
@@ -110,11 +112,7 @@ end
 --]]
 
 function Beanstalkd:close()
-    if not self.client_fd then
-        return nil, "not initialized"
-    end
-    mysocket.close(self.client_fd)
-    self.client_fd = nil
+    mysocketchannel:close()
 end
 
 --[[
@@ -293,8 +291,7 @@ may be:
    than max-job-size bytes.
 ]]
 function Beanstalkd:put(data, pri, delay, ttr)
-    local socket = self.client_fd
-    local res, err = _req(socket, data, {"put", pri, delay, ttr, #data})
+    local res, err = _req(nil, data, {"put", pri, delay, ttr, #data})
     --print("res = ",res)
     if not res then
         return nil, err
@@ -330,7 +327,7 @@ USING <tube>\r\n
  - <tube> is the name of the tube now being used.
 ]]
 function Beanstalkd:use(tube)
-    return _reqvalue(self.client_fd, {"use", tube}, "USING")
+    return _reqvalue(nil, {"use", tube}, "USING")
 end
 
 
@@ -391,23 +388,17 @@ RESERVED <id> <bytes>\r\n
    sent to the server in the put command for this job.
 ]]
 function Beanstalkd:reserve(timeout)
-    local socket = self.client_fd
     local res, err
     if timeout then
-        res, err = _req(socket, {"reserve-with-timeout", timeout})
+        res, err = _req("RESERVED", {"reserve-with-timeout", timeout})
     else
-        res, err = _req(socket, {"reserve"})
+        res, err = _req("RESERVED", {"reserve"})
     end
     if not res then
         return nil, err
     end
-    --print("Beanstalkd:reserve ===res=",res)
-    local data, err = _getjob(socket, res, "RESERVED")
-    if not data then
-        return nil, err
-    end
-
-    return data
+    -- print("Beanstalkd:reserve ===res=",res)
+    return res
 end
 
 --[[
@@ -429,7 +420,7 @@ The client then waits for one line of response, which may be:
    client sent the delete command.
 ]]
 function Beanstalkd:delete(id)
-    return _reqstate(self.client_fd, {"delete", id}, "DELETED")
+    return _reqstate(nil, {"delete", id}, "DELETED")
 end
 
 --[[
@@ -456,7 +447,7 @@ The client expects one line of response, which may be:
  - "NOT_FOUND\r\n" if the job does not exist or is not reserved by the client.
 ]]
 function Beanstalkd:release(id, priority, delay)
-    return _reqstate(self.client_fd, {"release", id, priority, delay}, "RELEASED")
+    return _reqstate(nil, {"release", id, priority, delay}, "RELEASED")
 end
 
 --[[
@@ -479,7 +470,7 @@ There are two possible responses:
  - "NOT_FOUND\r\n" if the job does not exist or is not reserved by the client.
 ]]
 function Beanstalkd:bury(id, priority)
-    return _reqstate(self.client_fd, {"bury", id, priority}, "BURIED")
+    return _reqstate(nil, {"bury", id, priority}, "BURIED")
 end
 
 --[[
@@ -496,7 +487,7 @@ There are two possible responses:
  - "NOT_FOUND\r\n" if the job does not exist or is not reserved by the client.
 ]]
 function Beanstalkd:touch(id)
-    return _reqstate(self.client_fd, {"touch", id}, "TOUCHED")
+    return _reqstate(nil, {"touch", id}, "TOUCHED")
 end
 
 --[[
@@ -517,7 +508,7 @@ WATCHING <count>\r\n
  - <count> is the integer number of tubes currently in the watch list.
 ]]
 function Beanstalkd:watch(tube)
-    return _reqvalue(self.client_fd, {"watch", tube}, "WATCHING", true)
+    return _reqvalue(nil, {"watch", tube}, "WATCHING", true)
 end
 
 --[[
@@ -536,7 +527,7 @@ The reply is one of:
    watch list.
 ]]
 function Beanstalkd:ignore(tube)
-    return _reqvalue(self.client_fd, {"ignore", tube}, "WATCHING", true)
+    return _reqvalue(nil, {"ignore", tube}, "WATCHING", true)
 end
 
 -- Other Commands
@@ -572,25 +563,19 @@ FOUND <id> <bytes>\r\n
    previous line.
 ]]
 function Beanstalkd:peek(id)
-    local socket = self.client_fd
     local res, err
     local _id = tonumber(id)
     if type(_id) == "number" then
-        res, err = _req(socket, {"peek", id})
+        res, err = _req("FOUND", {"peek", id})
     else
         -- id is state
-        res, err = _req(socket, {"peek-" .. id})
+        res, err = _req("FOUND", {"peek-" .. id})
     end
     if not res then
         return nil, err
     end
 
-    local data, err = _getjob(socket, res, "FOUND")
-    if not data then
-        return nil, err
-    end
-
-    return data
+    return res
 end
 
 --[[
@@ -610,7 +595,7 @@ KICKED <count>\r\n
  - <count> is an integer indicating the number of jobs actually kicked.
 ]]
 function Beanstalkd:kick(bound)
-    return _reqvalue(self.client_fd, {"kick", bound}, "KICKED", true)
+    return _reqvalue(nil, {"kick", bound}, "KICKED", true)
 end
 
 --[[
@@ -661,7 +646,7 @@ to scalars. It contains these keys:
  - "kicks" is the number of times this job has been kicked.
  ]]
 function Beanstalkd:statsJob(id)
-    return _reqyml(self.client_fd, {"stats-job", id})
+    return _reqyml("OK", {"stats-job", id})
 end
 
 --[[
@@ -703,7 +688,7 @@ to scalars. It contains these keys:
    reserve command while watching this tube but not yet received a response.
 ]]
 function Beanstalkd:statsTube(tube)
-    return _reqyml(self.client_fd, {"stats-tube", tube})
+    return _reqyml("OK", {"stats-tube", tube})
 end
 
 --[[
@@ -817,7 +802,7 @@ of strings to scalars. It contains these keys:
    to get before a new binlog file is opened
 ]]
 function Beanstalkd:stats()
-    return _reqyml(self.client_fd, {"stats"})
+    return _reqyml("OK", {"stats"})
 end
 
 --[[
@@ -836,7 +821,7 @@ OK <bytes>\r\n
    is a YAML file containing all tube names as a list of strings.
 ]]
 function Beanstalkd:listTubes()
-    return _reqyml(self.client_fd, {"list-tubes"})
+    return _reqyml("OK", {"list-tubes"})
 end
 
 --[[
@@ -852,7 +837,7 @@ USING <tube>\r\n
  - <tube> is the name of the tube being used.
 ]]
 function Beanstalkd:listTubeUsed()
-    return _reqvalue(self.client_fd, {"list-tube-used"}, "USING")
+    return _reqvalue(nil, {"list-tube-used"}, "USING")
 end
 
 --[[
@@ -872,12 +857,53 @@ OK <bytes>\r\n
    is a YAML file containing watched tube names as a list of strings.
 ]]
 function Beanstalkd:listTubesWatched()
-    return _reqyml(self.client_fd, {"list-tubes-watched"})
+    return _reqyml("OK", {"list-tubes-watched"})
 end
 
 -- private
 
-_req = function(socket, data, args)
+local function myreadreply( sock ,flag )
+
+  local res = sock:readline("\r\n")
+  -- print("res = ",res,"  flag=",flag)
+  if not res then
+      return false, "err read *l"
+  end
+
+  --for RESERVED operation
+  if "RESERVED" == flag then
+      local data, err = _getjob(sock, res, "RESERVED")
+      -- print("its reserved ===data=",data)
+      if not data then
+          return nil, err
+      end
+      return true, data
+  elseif "FOUND" == flag then
+      local data, err = _getjob(sock, res, "FOUND")
+      -- print("its peek ===data=",data)
+      if not data then
+          return nil, err
+      end
+      return true, data
+  elseif "OK" == flag then
+      local data, err = _getyml(sock, res, "OK")
+      -- print("its yml ===data=",data)
+      if not data then
+          return nil, err
+      end
+      return true, data
+  end
+
+  return true,res
+end
+
+local function _query_resp(flag)
+     return function(sock)
+        return myreadreply(sock,flag)
+    end
+end
+
+_req = function(flag, data, args)
     if type(data) == "table" then
         args = data
         data = nil
@@ -891,7 +917,7 @@ _req = function(socket, data, args)
     else
       req = {0,0}
     end
-    --dump(args," _req args=")
+    -- dump(args," _req args=")
     req[1] = table_concat(args," ")
     req[2] = "\r\n"
     if data then
@@ -899,18 +925,13 @@ _req = function(socket, data, args)
         req[4] = "\r\n"
     end
     local myreq = table_concat(req)
-    --dump(myreq,"myreq--  ")
-    local status = mysocket.write(socket,myreq)
-    if not status then
-        mysocket.close(socket)
-        return nil, "err write"
-    end
-
-    return _readreply(socket)
+    local query_resp = _query_resp(flag)
+    return mysocketchannel:request(myreq, query_resp )
 end
 
-_reqstate = function(socket, args, word)
-    local res, err = _req(socket, args)
+_reqstate = function(flag, args, word)
+    local res, err = _req(flag, args)
+    -- print("_reqstate-res- ",res)
     if not res then
         return nil, err
     end
@@ -922,12 +943,12 @@ _reqstate = function(socket, args, word)
     return true
 end
 
-_reqvalue = function(socket, args, word, isnumber)
-    local res, err = _req(socket, args)
+_reqvalue = function(flag, args, word, isnumber)
+    local res, err = _req(flag, args)
     if not res then
         return nil, err
     end
-
+    -- print("res ======",res)
     local value = _getvalue(res, word, isnumber)
     if not value then
         return nil, res
@@ -936,26 +957,21 @@ _reqvalue = function(socket, args, word, isnumber)
     return value
 end
 
-_reqyml = function(socket, args)
-    local res, err = _req(socket, args)
-    --print("_reqyml res=",res)
+_reqyml = function(flag, args)
+    local res, err = _req(flag, args)
+    -- print("_reqyml res=",res)
     if not res then
         return nil, err
     end
 
-    local data, err = _getyml(socket, res, "OK")
-    --print("data ==",data)
-    if not data then
-        return nil, err
-    end
-
-    return data
+    return res
 end
 
 _readreply = function(socket, bytes)
-    --print("start read reply bytes=",bytes)
+    -- dump(socket)
+    -- print("start read reply bytes=",socket,bytes)
     if bytes then
-        local res = mysocket.read(socket,bytes + 2)
+        local res = socket:read(bytes + 2)
         if not res then
             return nil, "err read"
         end
@@ -963,8 +979,7 @@ _readreply = function(socket, bytes)
         --print("read reply =====",result)
         return result
     else
-         --print("start read reply")
-        local res = mysocket.readline(socket,"\r\n")
+        local res = socket:readline("\r\n")
         --print("read reply =",res," bytes=",bytes)
         if not res then
             return nil, "err read *l"
@@ -972,6 +987,7 @@ _readreply = function(socket, bytes)
 
         return res
     end
+
 end
 
 _getvalue = function(res, word, isnumber)
@@ -990,7 +1006,7 @@ end
 _getjob = function(socket, res, word)
     local pattern = string_format("^%s (%%d+) (%%d+)$", word)
     local id, bytes = string_match(res, pattern)
-    --print(res,word,pattern,id, bytes)
+    -- print(res,word,pattern,id, bytes)
     if (not id) or (not bytes) then
         return nil, res
     end
