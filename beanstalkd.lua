@@ -68,6 +68,7 @@ function Beanstalkd:connect(host, port)
     local channel = socketchannel.channel {
         host = host or DEFAULT_HOST,
         port = port or DEFAULT_PORT,
+        nodelay = true,
     }
     -- try connect first only once
     channel:connect(true)
